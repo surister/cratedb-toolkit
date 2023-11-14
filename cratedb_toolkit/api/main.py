@@ -6,7 +6,7 @@ import typing as t
 from abc import abstractmethod
 
 from cratedb_toolkit.api.guide import GuidingTexts
-from cratedb_toolkit.cluster.util import get_cluster_info
+from cratedb_toolkit.cluster.util import deploy_cluster, get_cluster_by_name, get_cluster_info
 from cratedb_toolkit.exception import CroudException, OperationFailed
 from cratedb_toolkit.io.croud import CloudIo
 from cratedb_toolkit.model import ClusterInformation, DatabaseAddress, InputOutputResource, TableAddress
@@ -26,12 +26,60 @@ class ManagedCluster(ClusterBase):
     Wrap a managed CrateDB database cluster on CrateDB Cloud.
     """
 
-    cloud_id: str
+    cloud_id: t.Optional[str] = None
+    name: t.Optional[str] = None
     address: t.Optional[DatabaseAddress] = None
     info: t.Optional[ClusterInformation] = None
+    exists: bool = False
 
     def __post_init__(self):
-        logger.info(f"Connecting to CrateDB Cloud Cluster: {self.cloud_id}")
+        logger.info(f"Connecting to CrateDB Cloud Cluster: {self.cloud_id} ({self.name})")
+        self.probe()
+
+    def probe(self):
+        """
+        Probe a CrateDB Cloud cluster, API-wise.
+        """
+        if not self.cloud_id and not self.name:
+            self.exists = False
+            raise ValueError("Either cluster identifier or name needs to be specified")
+        try:
+            if self.cloud_id:
+                self.info = get_cluster_info(cluster_id=self.cloud_id)
+                self.name = self.info.cloud["name"]
+            else:
+                self.info = get_cluster_by_name(self.name)
+                self.cloud_id = self.info.cloud["id"]
+        except CroudException as ex:
+            self.exists = False
+            if "Cluster not found" not in str(ex):
+                raise
+        if self.info:
+            self.exists = True
+            logger.info(f"Cluster information: name={self.info.cloud.get('name')}, url={self.info.cloud.get('url')}")
+
+    def acquire(self):
+        """
+        Acquire a database cluster.
+        When cluster does not exist, deploy it.
+        """
+        if not self.exists:
+            logger.info(f"Cluster does not exist: {self.name}")
+            logger.info(f"Deploying cluster: {self.name}")
+            if self.deploy():
+                self.probe()
+            else:
+                raise CroudException(f"Deployment of cluster failed: {self.name}")
+
+    def deploy(self):
+        """
+        Run the cluster deployment procedure.
+        """
+        try:
+            deploy_cluster(self.name)
+        except CroudException:
+            return False
+        return True
 
     def load_table(self, resource: InputOutputResource, target: t.Optional[TableAddress] = None):
         """
@@ -48,10 +96,6 @@ class ManagedCluster(ClusterBase):
         target = target or TableAddress()
 
         try:
-            cluster_info = get_cluster_info(cluster_id=self.cloud_id)
-            logger.info(
-                f"Cluster information: name={cluster_info.cloud.get('name')}, url={cluster_info.cloud.get('url')}"
-            )
             cio = CloudIo(cluster_id=self.cloud_id)
         except CroudException as ex:
             msg = f"Connecting to cluster resource failed: {self.cloud_id}. Reason: {ex}"
@@ -66,7 +110,7 @@ class ManagedCluster(ClusterBase):
             logger.info("Job information:\n%s", json.dumps(job_info, indent=2))
             # TODO: Explicitly report about `failed_records`, etc.
             texts = GuidingTexts(
-                admin_url=cluster_info.cloud["url"],
+                admin_url=self.info.cloud["url"],
                 table_name=job_info["destination"]["table"],
             )
             if success:
