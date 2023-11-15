@@ -3,7 +3,7 @@
 import pytest
 import responses
 
-from cratedb_toolkit.testing.testcontainers.cratedb import CrateDBContainer
+from cratedb_toolkit.testing.testcontainers.util import PytestTestcontainerAdapter
 from cratedb_toolkit.util import DatabaseAdapter
 from cratedb_toolkit.util.common import setup_logging
 
@@ -26,25 +26,24 @@ RESET_TABLES = [
 ]
 
 
-class CrateDBFixture:
+class CrateDBFixture(PytestTestcontainerAdapter):
     """
     A little helper wrapping Testcontainer's `CrateDBContainer` and
     CrateDB Toolkit's `DatabaseAdapter`, agnostic of the test framework.
     """
 
     def __init__(self):
-        self.cratedb = None
+        self.container = None
         self.database: DatabaseAdapter = None
-        self.setup()
+        super().__init__()
 
     def setup(self):
-        # TODO: Make image name configurable.
-        self.cratedb = CrateDBContainer("crate/crate:nightly")
-        self.cratedb.start()
-        self.database = DatabaseAdapter(dburi=self.get_connection_url())
+        from cratedb_toolkit.testing.testcontainers.cratedb import CrateDBContainer
 
-    def finalize(self):
-        self.cratedb.stop()
+        # TODO: Make image name configurable.
+        self.container = CrateDBContainer("crate/crate:nightly")
+        self.container.start()
+        self.database = DatabaseAdapter(dburi=self.get_connection_url())
 
     def reset(self):
         # TODO: Make list of tables configurable.
@@ -52,7 +51,7 @@ class CrateDBFixture:
             self.database.connection.exec_driver_sql(f"DROP TABLE IF EXISTS {reset_table};")
 
     def get_connection_url(self, *args, **kwargs):
-        return self.cratedb.get_connection_url(*args, **kwargs)
+        return self.container.get_connection_url(*args, **kwargs)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -63,7 +62,7 @@ def configure_database_schema(session_mocker):
 
     If not configured otherwise, the test suite currently uses `testdrive-ext`.
     """
-    session_mocker.patch("os.environ", {"CRATEDB_EXT_SCHEMA": TESTDRIVE_EXT_SCHEMA})
+    session_mocker.patch.dict("os.environ", {"CRATEDB_EXT_SCHEMA": TESTDRIVE_EXT_SCHEMA})
 
 
 @pytest.fixture(scope="session")
@@ -74,7 +73,7 @@ def cratedb_service():
     db = CrateDBFixture()
     db.reset()
     yield db
-    db.finalize()
+    db.stop()
 
 
 @pytest.fixture(scope="function")
@@ -92,7 +91,11 @@ def cloud_cluster_mock():
         responses.Response(
             method="GET",
             url="https://console.cratedb.cloud/api/v2/clusters/e1e38d92-a650-48f1-8a70-8133f2d5c400/",
-            json={"url": "https://testdrive.example.org:4200/", "project_id": "3b6b7c82-d0ab-458c-ae6f-88f8346765ee"},
+            json={
+                "url": "https://testdrive.example.org:4200/",
+                "project_id": "3b6b7c82-d0ab-458c-ae6f-88f8346765ee",
+                "name": "testcluster",
+            },
         )
     )
     responses.add(
