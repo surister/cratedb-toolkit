@@ -2,9 +2,14 @@ import abc
 import dataclasses
 import json
 import logging
+import os
 import sys
+import time
 import typing as t
 from abc import abstractmethod
+
+import crate.client
+import sqlalchemy as sa
 
 from cratedb_toolkit.api.guide import GuidingTexts
 from cratedb_toolkit.cluster.util import deploy_cluster, get_cluster_by_name, get_cluster_info
@@ -12,15 +17,27 @@ from cratedb_toolkit.config import CONFIG
 from cratedb_toolkit.exception import CroudException, OperationFailed
 from cratedb_toolkit.io.croud import CloudIo, CloudJob
 from cratedb_toolkit.model import ClusterInformation, DatabaseAddress, InputOutputResource, TableAddress
+from cratedb_toolkit.util import DatabaseAdapter
 from cratedb_toolkit.util.runtime import flexfun
 from cratedb_toolkit.util.setting import RequiredMutuallyExclusiveSettingsGroup, Setting
 
 logger = logging.getLogger(__name__)
 
 
+@dataclasses.dataclass
+class ClientBundle:
+    adapter: DatabaseAdapter
+    dbapi: crate.client.connection.Connection
+    sqlalchemy: sa.Engine
+
+
 class ClusterBase(abc.ABC):
     @abstractmethod
     def load_table(self, source: InputOutputResource, target: TableAddress):
+        raise NotImplementedError("Child class needs to implement this method")
+
+    @abstractmethod
+    def get_client_bundle(self) -> ClientBundle:
         raise NotImplementedError("Child class needs to implement this method")
 
 
@@ -102,6 +119,8 @@ class ManagedCluster(ClusterBase):
     def probe(self) -> "ManagedCluster":
         """
         Probe a CrateDB Cloud cluster, API-wise.
+
+        TODO: Investigate callers, and reduce number of invocations.
         """
         try:
             if self.id:
@@ -144,6 +163,11 @@ class ManagedCluster(ClusterBase):
         if not self.exists:
             logger.info(f"Cluster does not exist, deploying it: id={self.id}, name={self.name}")
             self.deploy()
+            logger.info(f"Cluster deployed: id={self.id}, name={self.name}")
+
+            # Wait a bit, to let the deployment settle, to work around DNS propagation problems.
+            time.sleep(3.25)
+
             self.probe()
             if not self.exists:
                 # TODO: Is it possible to gather and propagate more information why the deployment failed?
@@ -210,6 +234,29 @@ class ManagedCluster(ClusterBase):
             logger.exception(msg)
             raise OperationFailed(msg) from ex
 
+    def get_client_bundle(self, username: str = None, password: str = None) -> ClientBundle:
+        """
+        Return a bundle of client handles to the CrateDB Cloud cluster.
+
+        - adapter: A high-level `DatabaseAdapter` instance, offering a few convenience methods.
+        - dbapi: A DBAPI connection object, as provided by SQLAlchemy's `dbapi_connection`.
+        - sqlalchemy: An SQLAlchemy `Engine` object.
+        """
+        if username is None:
+            username = os.environ.get("CRATEDB_USERNAME")
+        if password is None:
+            password = os.environ.get("CRATEDB_PASSWORD")
+        cratedb_http_url = self.info.cloud["url"]
+        logger.info(f"Connecting to database cluster at: {cratedb_http_url}")
+        address = DatabaseAddress.from_httpuri(cratedb_http_url)
+        address.with_credentials(username=username, password=password)
+        adapter = DatabaseAdapter(address.dburi)
+        return ClientBundle(
+            adapter=adapter,
+            dbapi=adapter.connection.connection.dbapi_connection,
+            sqlalchemy=adapter.engine,
+        )
+
 
 @dataclasses.dataclass
 class StandaloneCluster(ClusterBase):
@@ -250,3 +297,6 @@ class StandaloneCluster(ClusterBase):
                 raise OperationFailed(msg)
         else:
             raise NotImplementedError("Importing resource not implemented yet")
+
+    def get_client_bundle(self, username: str = None, password: str = None) -> ClientBundle:
+        raise NotImplementedError("Not implemented for `StandaloneCluster` yet")
