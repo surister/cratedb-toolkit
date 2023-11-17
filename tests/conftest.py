@@ -1,10 +1,12 @@
 # Copyright (c) 2021-2023, Crate.io Inc.
 # Distributed under the terms of the AGPLv3 license, see LICENSE.
 import json
+import os
 
 import pytest
 import responses
 
+from cratedb_toolkit.api.main import ManagedClusterSettings
 from cratedb_toolkit.testing.testcontainers.util import PytestTestcontainerAdapter
 from cratedb_toolkit.util import DatabaseAdapter
 from cratedb_toolkit.util.common import setup_logging
@@ -189,6 +191,22 @@ def mock_cloud_import():
             }
         ],
     )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def reset_environment():
+    """
+    Reset all environment variables in use, so that they do not pollute the test suite.
+    """
+    envvars = []
+    specs = ManagedClusterSettings.settings_spec
+    for spec in specs:
+        envvars.append(spec.click.envvar)
+    for envvar in envvars:
+        try:
+            del os.environ[envvar]
+        except KeyError:
+            pass
 
 
 setup_logging()
