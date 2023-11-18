@@ -69,8 +69,9 @@ def import_csv():
     """
     Import CSV file from HTTP, derive table name from file name.
 
-    A corresponding command to query the imported data is::
+    The corresponding shell commands are::
 
+        ctk load table "https://github.com/crate/cratedb-datasets/raw/main/machine-learning/timeseries/nab-machine-failure.csv"
         ctk shell --command 'SELECT * FROM "nab-machine-failure" LIMIT 10;'
     """
 
@@ -97,8 +98,9 @@ def import_parquet():
     """
     Import Parquet file from HTTP, use specific schema and table names.
 
-    A corresponding command to query the imported data is::
+    The corresponding shell commands are::
 
+        ctk load table "https://github.com/crate/cratedb-datasets/raw/main/timeseries/yc.2019.07-tiny.parquet.gz"
         ctk shell --command 'SELECT * FROM "testdrive"."yc-201907" LIMIT 10;'
     """
 
