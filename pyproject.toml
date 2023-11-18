@@ -196,6 +196,8 @@ markers = [
   "examples",
   "influxdb",
   "mongodb",
+  "python",
+  "shell",
   "slow",
 ]
 
